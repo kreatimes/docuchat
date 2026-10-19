@@ -1,0 +1,30 @@
+server:
+  port: 8080
+
+spring:
+  application:
+    name: docuchat
+  servlet:
+    multipart:
+      max-file-size: 20MB
+      max-request-size: 20MB
+  ai:
+    google:
+      genai:
+        # Clave gratuita de Google AI Studio (https://aistudio.google.com/apikey)
+        api-key: ${GEMINI_API_KEY}
+        chat:
+          options:
+            model: ${GEMINI_CHAT_MODEL:gemini-3.8-flash}
+            temperature: 0.2
+        embedding:
+          api-key: ${GEMINI_API_KEY}
+          text:
+            options:
+              model: ${GEMINI_EMBEDDING_MODEL:gemini-embedding-001}
+
+docuchat:
+  # Carpeta donde se guardan los vectores y la lista de documentos
+  data-dir: ${DOCUCHAT_DATA_DIR:./data}
+  # Cuantos fragmentos se pasan a la IA como contexto
+  top-k: 4
