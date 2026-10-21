@@ -17,6 +17,8 @@ spring:
           options:
             model: ${GEMINI_CHAT_MODEL:gemini-3.8-flash}
             temperature: 0.2
+            # Piensa poco antes de responder: mucho más rápido y suficiente para RAG
+            thinking-level: LOW
         embedding:
           api-key: ${GEMINI_API_KEY}
           text:
