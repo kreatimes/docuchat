@@ -59,6 +59,8 @@ public class DocumentService {
         // 1. Leer: un Document por pagina, con metadatos page_number y file_name
         List<Document> pages = new PagePdfDocumentReader(resource).get().stream()
                 .filter(d -> d.getText() != null && !d.getText().isBlank())
+                // El lector respeta la maquetación y mete espacios de más: los quitamos
+                .map(d -> d.mutate().text(d.getText().replaceAll("[ \\t]+", " ")).build())
                 .toList();
         if (pages.isEmpty()) {
             throw new IllegalArgumentException("El PDF no tiene texto (¿es un PDF escaneado?)");

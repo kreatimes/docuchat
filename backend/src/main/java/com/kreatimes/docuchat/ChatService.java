@@ -23,7 +23,7 @@ public class ChatService {
     private static final String SYSTEM_PROMPT = """
             Eres un asistente que responde preguntas sobre documentos del usuario.
             Responde SOLO con la informacion del CONTEXTO.
-            Si la respuesta no esta en el contexto, di que no aparece en los documentos. No inventes.
+            Si la respuesta no esta en el contexto, responde exactamente: NO_ENCONTRADO. No inventes.
             Cita las fuentes que uses con su numero entre corchetes, por ejemplo [1].
             Responde en el mismo idioma que la pregunta.
             """;
@@ -76,6 +76,10 @@ public class ChatService {
                 .user("CONTEXTO:\n" + context + "PREGUNTA: " + question)
                 .call()
                 .content();
+
+        if (answer == null || answer.strip().startsWith("NO_ENCONTRADO")) {
+            return new Answer("Esa información no aparece en tus documentos.", List.of());
+        }
 
         return new Answer(answer, sources);
     }
