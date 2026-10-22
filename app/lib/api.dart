@@ -1,4 +1,5 @@
 import 'package:dio/dio.dart';
+import 'dart:convert';
 
 // Emulador Android: 10.0.2.2 apunta al localhost de tu PC.
 // Movil fisico: flutter run --dart-define=API_URL=http://IP_DE_TU_PC:8080
@@ -64,6 +65,23 @@ class Api {
       'documentId': documentId,
     });
     return Answer.fromJson(res.data);
+  }
+
+  // Streaming: el backend manda una linea JSON por trozo de texto y una final con las fuentes
+  static Stream<Map<String, dynamic>> askStream(String question, {String? documentId}) async* {
+    final res = await _dio.post<ResponseBody>(
+      '/api/chat/stream',
+      data: {'question': question, 'documentId': documentId},
+      options: Options(responseType: ResponseType.stream),
+    );
+    final lines = res.data!.stream
+        .cast<List<int>>()
+        .transform(utf8.decoder)
+        .transform(const LineSplitter());
+    await for (final line in lines) {
+      if (line.trim().isEmpty) continue;
+      yield jsonDecode(line) as Map<String, dynamic>;
+    }
   }
 
   // El backend devuelve {"error": "..."} en los 400: lo mostramos tal cual

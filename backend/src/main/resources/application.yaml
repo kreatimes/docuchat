@@ -15,7 +15,7 @@ spring:
         api-key: ${GEMINI_API_KEY}
         chat:
           options:
-            model: ${GEMINI_CHAT_MODEL:gemini-3.8-flash}
+            model: ${GEMINI_CHAT_MODEL:gemini-3.5-flash-lite}
             temperature: 0.2
             # Piensa poco antes de responder: mucho más rápido y suficiente para RAG
             thinking-level: LOW
@@ -24,6 +24,9 @@ spring:
           text:
             options:
               model: ${GEMINI_EMBEDDING_MODEL:gemini-embedding-001}
+mvc:
+  async:
+    request-timeout: 120s
 
 docuchat:
   # Carpeta donde se guardan los vectores y la lista de documentos

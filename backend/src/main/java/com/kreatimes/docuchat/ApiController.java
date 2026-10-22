@@ -1,5 +1,6 @@
 package com.kreatimes.docuchat;
 
+import reactor.core.publisher.Flux;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.web.bind.annotation.*;
@@ -51,6 +52,11 @@ public class ApiController {
     @PostMapping("/chat")
     public ChatService.Answer ask(@RequestBody AskRequest request) {
         return chatService.ask(request.question(), request.documentId());
+    }
+
+    @PostMapping(value = "/chat/stream", produces = MediaType.APPLICATION_NDJSON_VALUE)
+    public Flux<ChatService.StreamChunk> askStream(@RequestBody AskRequest request) {
+        return chatService.askStream(request.question(), request.documentId());
     }
 
     @ExceptionHandler(IllegalArgumentException.class)

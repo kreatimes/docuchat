@@ -2,7 +2,6 @@ import 'package:flutter/material.dart';
 
 import 'api.dart';
 
-
 class ChatPage extends StatefulWidget {
   const ChatPage({super.key, this.document});
 
@@ -18,14 +17,20 @@ class _ChatMessage {
       : fromUser = true,
         sources = const [];
 
-  _ChatMessage.bot(this.text, this.sources) : fromUser = false;
+  _ChatMessage.bot()
+      : fromUser = false,
+        text = '',
+        sources = const [];
 
-  final String text;
   final bool fromUser;
-  final List<Source> sources;
+  // La respuesta se va rellenando mientras llega en streaming
+  String text;
+  List<Source> sources;
 }
 
 class _ChatPageState extends State<ChatPage> {
+  static const _notFound = 'NO_ENCONTRADO';
+
   final _input = TextEditingController();
   final _scroll = ScrollController();
   final _messages = <_ChatMessage>[];
@@ -43,27 +48,43 @@ class _ChatPageState extends State<ChatPage> {
     if (question.isEmpty || _thinking) return;
 
     _input.clear();
+    final reply = _ChatMessage.bot();
     setState(() {
-      _messages.add(_ChatMessage.user(question));
+      _messages
+        ..add(_ChatMessage.user(question))
+        ..add(reply);
       _thinking = true;
     });
     _scrollToEnd();
 
-    _ChatMessage reply;
+    final buffer = StringBuffer();
     try {
-      final answer = await Api.ask(question, documentId: widget.document?.id);
-      reply = _ChatMessage.bot(answer.text, answer.sources);
+      await for (final chunk in Api.askStream(question, documentId: widget.document?.id)) {
+        if (!mounted) return;
+        if (chunk['text'] != null) buffer.write(chunk['text']);
+
+        final soFar = buffer.toString().trim();
+        setState(() {
+          if (chunk['done'] == true) {
+            reply.sources = ((chunk['sources'] ?? []) as List).map((s) => Source.fromJson(s)).toList();
+            reply.text = soFar.startsWith(_notFound) ? 'Esa información no aparece en tus documentos.' : soFar;
+          } else if (!_notFound.startsWith(soFar)) {
+            // No mostramos el texto mientras pueda ser el aviso NO_ENCONTRADO
+            reply.text = soFar;
+          }
+        });
+        _scrollToEnd();
+      }
     } catch (e) {
       debugPrint('Error preguntando: $e');
-      reply = _ChatMessage.bot(Api.errorMessage(e), const []);
+      if (mounted) setState(() => reply.text = Api.errorMessage(e));
     }
 
     if (!mounted) return;
     setState(() {
-      _messages.add(reply);
+      if (reply.text.isEmpty) reply.text = 'No se ha recibido respuesta. Inténtalo de nuevo.';
       _thinking = false;
     });
-    _scrollToEnd();
   }
 
   // Baja al ultimo mensaje cuando termine de dibujarse
@@ -72,7 +93,7 @@ class _ChatPageState extends State<ChatPage> {
       if (!_scroll.hasClients) return;
       _scroll.animateTo(
         _scroll.position.maxScrollExtent,
-        duration: const Duration(milliseconds: 300),
+        duration: const Duration(milliseconds: 200),
         curve: Curves.easeOut,
       );
     });
@@ -103,9 +124,13 @@ class _ChatPageState extends State<ChatPage> {
                 : ListView.builder(
               controller: _scroll,
               padding: const EdgeInsets.all(16),
-              itemCount: _messages.length + (_thinking ? 1 : 0),
-              itemBuilder: (context, i) =>
-              i == _messages.length ? const _Thinking() : _Bubble(message: _messages[i]),
+              itemCount: _messages.length,
+              itemBuilder: (context, i) {
+                final message = _messages[i];
+                // Mientras no llega el primer trozo, mostramos el indicador
+                if (!message.fromUser && message.text.isEmpty) return const _Thinking();
+                return _Bubble(message: message);
+              },
             ),
           ),
           SafeArea(
