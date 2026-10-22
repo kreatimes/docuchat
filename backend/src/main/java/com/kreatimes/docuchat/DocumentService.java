@@ -11,12 +11,13 @@ import org.springframework.core.io.ByteArrayResource;
 import org.springframework.stereotype.Service;
 
 import java.io.File;
-import java.io.IOException;
-import java.io.UncheckedIOException;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
+import java.util.stream.Collectors;
 
 // Ingesta de PDFs: leer -> trocear -> generar embeddings -> guardar.
 // ponytail: metodos synchronized (un usuario, pocos documentos); con varios usuarios, base de datos real.
@@ -24,27 +25,33 @@ import java.util.UUID;
 public class DocumentService {
 
     public record StoredDocument(String id, String filename, int pages, int chunks,
-                                 Instant uploadedAt, List<String> chunkIds) {
+                                 Instant uploadedAt, List<String> chunkIds, String folderId) {
+        StoredDocument inFolder(String folder) {
+            return new StoredDocument(id, filename, pages, chunks, uploadedAt, chunkIds, folder);
+        }
     }
 
     private final SimpleVectorStore vectorStore;
-    private final ObjectMapper objectMapper;
     private final File vectorsFile;
-    private final File documentsFile;
+    private final JsonStore<StoredDocument> store;
     private final List<StoredDocument> documents;
 
     public DocumentService(SimpleVectorStore vectorStore, ObjectMapper objectMapper,
                            @Value("${docuchat.data-dir}") String dataDir) {
         this.vectorStore = vectorStore;
-        this.objectMapper = objectMapper;
         File dir = new File(dataDir);
         dir.mkdirs();
         this.vectorsFile = new File(dir, "vectors.json");
-        this.documentsFile = new File(dir, "documents.json");
-        this.documents = loadDocuments();
+        this.store = new JsonStore<>(new File(dir, "documents.json"), objectMapper,
+                new TypeReference<List<StoredDocument>>() {
+                });
+        // Los documentos subidos antes de existir las carpetas van a Descargas
+        this.documents = new ArrayList<>(store.load().stream()
+                .map(d -> d.folderId() == null ? d.inFolder(FolderService.DOWNLOADS) : d)
+                .toList());
     }
 
-    public synchronized StoredDocument upload(String filename, byte[] pdfBytes) {
+    public synchronized StoredDocument upload(String filename, byte[] pdfBytes, String folderId) {
         if (filename == null || !filename.toLowerCase().endsWith(".pdf")) {
             throw new IllegalArgumentException("Solo se admiten archivos PDF");
         }
@@ -57,11 +64,16 @@ public class DocumentService {
         };
 
         // 1. Leer: un Document por pagina, con metadatos page_number y file_name
-        List<Document> pages = new PagePdfDocumentReader(resource).get().stream()
-                .filter(d -> d.getText() != null && !d.getText().isBlank())
-                // El lector respeta la maquetación y mete espacios de más: los quitamos
-                .map(d -> d.mutate().text(d.getText().replaceAll("[ \\t]+", " ")).build())
-                .toList();
+        List<Document> pages;
+        try {
+            pages = new PagePdfDocumentReader(resource).get().stream()
+                    .filter(d -> d.getText() != null && !d.getText().isBlank())
+                    // El lector respeta la maquetación y mete espacios de más: los quitamos
+                    .map(d -> d.mutate().text(d.getText().replaceAll("[ \\t]+", " ")).build())
+                    .toList();
+        } catch (RuntimeException e) {
+            throw new IllegalArgumentException("No se ha podido leer el PDF. ¿Está dañado?");
+        }
         if (pages.isEmpty()) {
             throw new IllegalArgumentException("El PDF no tiene texto (¿es un PDF escaneado?)");
         }
@@ -77,49 +89,58 @@ public class DocumentService {
         vectorStore.add(chunks);
         vectorStore.save(vectorsFile);
 
-        StoredDocument doc = new StoredDocument(docId, filename, pages.size(), chunks.size(),
-                Instant.now(), chunks.stream().map(Document::getId).toList());
+        StoredDocument doc = new StoredDocument(docId, filename, pages.size(), chunks.size(), Instant.now(),
+                chunks.stream().map(Document::getId).toList(),
+                folderId == null ? FolderService.DOWNLOADS : folderId);
         documents.add(doc);
-        saveDocuments();
+        store.save(documents);
         return doc;
     }
 
-    public synchronized List<StoredDocument> list() {
-        return List.copyOf(documents);
+    // Documentos de una carpeta (o todos si folderId es null), el mas nuevo primero
+    public synchronized List<StoredDocument> list(String folderId) {
+        return documents.stream()
+                .filter(d -> folderId == null || d.folderId().equals(folderId))
+                .sorted(Comparator.comparing(StoredDocument::uploadedAt).reversed())
+                .toList();
     }
 
     public synchronized boolean exists(String docId) {
         return documents.stream().anyMatch(d -> d.id().equals(docId));
     }
 
+    // Numero de documentos por carpeta, para mostrarlo junto a cada carpeta
+    public synchronized Map<String, Long> countByFolder() {
+        return documents.stream().collect(Collectors.groupingBy(StoredDocument::folderId, Collectors.counting()));
+    }
+
+    // Mover no reprocesa el PDF: la carpeta solo es un dato del documento
+    public synchronized StoredDocument move(String docId, String folderId) {
+        StoredDocument doc = find(docId);
+        StoredDocument moved = doc.inFolder(folderId);
+        documents.set(documents.indexOf(doc), moved);
+        store.save(documents);
+        return moved;
+    }
+
+    // Al borrar una carpeta, sus documentos pasan a otra (Descargas)
+    public synchronized void moveAll(String fromFolderId, String toFolderId) {
+        documents.replaceAll(d -> d.folderId().equals(fromFolderId) ? d.inFolder(toFolderId) : d);
+        store.save(documents);
+    }
+
     public synchronized void delete(String docId) {
-        StoredDocument doc = documents.stream()
-                .filter(d -> d.id().equals(docId))
-                .findFirst()
-                .orElseThrow(() -> new IllegalArgumentException("Documento no encontrado"));
+        StoredDocument doc = find(docId);
         vectorStore.delete(doc.chunkIds());
         vectorStore.save(vectorsFile);
         documents.remove(doc);
-        saveDocuments();
+        store.save(documents);
     }
 
-    private List<StoredDocument> loadDocuments() {
-        if (!documentsFile.exists()) {
-            return new ArrayList<>();
-        }
-        try {
-            return new ArrayList<>(objectMapper.readValue(documentsFile, new TypeReference<List<StoredDocument>>() {
-            }));
-        } catch (IOException e) {
-            throw new UncheckedIOException("No se pudo leer " + documentsFile, e);
-        }
-    }
-
-    private void saveDocuments() {
-        try {
-            objectMapper.writerWithDefaultPrettyPrinter().writeValue(documentsFile, documents);
-        } catch (IOException e) {
-            throw new UncheckedIOException("No se pudo guardar " + documentsFile, e);
-        }
+    private StoredDocument find(String docId) {
+        return documents.stream()
+                .filter(d -> d.id().equals(docId))
+                .findFirst()
+                .orElseThrow(() -> new IllegalArgumentException("Documento no encontrado"));
     }
 }

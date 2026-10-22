@@ -10,6 +10,7 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
+import reactor.core.scheduler.Schedulers;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -37,11 +38,16 @@ public class ChatService {
         }
     }
 
+    // Respuesta de un documento al preguntar a toda una carpeta
+    public record DocumentAnswer(String documentId, String filename, String answer, List<Source> sources) {
+    }
+
     // Contexto numerado + fuentes, listo para mandar a la IA
     private record Retrieval(String context, List<Source> sources) {
     }
 
     private static final String NOT_FOUND = "NO_ENCONTRADO";
+    private static final String NOT_FOUND_MESSAGE = "Esa información no aparece en tus documentos.";
     private static final String NO_DOCUMENTS = "Todavia no hay documentos. Sube un PDF para empezar.";
 
     private static final String SYSTEM_PROMPT = """
@@ -82,7 +88,7 @@ public class ChatService {
         log.info("Gemini: {} ms", System.currentTimeMillis() - start);
 
         if (answer == null || answer.strip().startsWith(NOT_FOUND)) {
-            return new Answer("Esa información no aparece en tus documentos.", List.of());
+            return new Answer(NOT_FOUND_MESSAGE, List.of());
         }
         return new Answer(answer, retrieval.sources());
     }
@@ -105,6 +111,27 @@ public class ChatService {
                 // Cuando termina, mandamos las fuentes (ninguna si no encontro la respuesta)
                 .concatWith(Mono.fromSupplier(() -> StreamChunk.done(
                         full.toString().strip().startsWith(NOT_FOUND) ? List.of() : retrieval.sources())));
+    }
+
+    // Pregunta a cada documento de la carpeta por separado: una respuesta por documento.
+    // Van de una en una (concatMap) para no pasar el limite de peticiones por minuto de Gemini.
+    public Flux<DocumentAnswer> askFolder(String question, String folderId) {
+        if (question == null || question.isBlank()) {
+            throw new IllegalArgumentException("La pregunta esta vacia");
+        }
+        return Flux.fromIterable(documentService.list(folderId))
+                .concatMap(doc -> Mono.fromCallable(() -> {
+                            Answer answer = ask(question, doc.id());
+                            String text = NOT_FOUND_MESSAGE.equals(answer.answer())
+                                    ? "No aparece en este documento." : answer.answer();
+                            return new DocumentAnswer(doc.id(), doc.filename(), text, answer.sources());
+                        })
+                        .subscribeOn(Schedulers.boundedElastic())
+                        .onErrorResume(e -> {
+                            log.error("Error preguntando a {}", doc.filename(), e);
+                            return Mono.just(new DocumentAnswer(doc.id(), doc.filename(),
+                                    "No se ha podido consultar este documento.", List.of()));
+                        }));
     }
 
     // 1. Recuperar: busqueda por similitud, opcionalmente limitada a un documento.

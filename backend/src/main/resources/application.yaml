@@ -24,9 +24,9 @@ spring:
           text:
             options:
               model: ${GEMINI_EMBEDDING_MODEL:gemini-embedding-001}
-mvc:
-  async:
-    request-timeout: 120s
+  mvc:
+    async:
+      request-timeout: 120s
 
 docuchat:
   # Carpeta donde se guardan los vectores y la lista de documentos
