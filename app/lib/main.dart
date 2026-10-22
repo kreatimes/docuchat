@@ -305,7 +305,8 @@ class _HomePageState extends State<HomePage> {
               return ListTile(
                 leading: const Icon(Icons.picture_as_pdf),
                 title: Text(doc.filename),
-                subtitle: Text('${doc.pages} páginas · ${doc.chunks} fragmentos'),
+                subtitle: Text('${doc.pages} ${doc.pages == 1 ? 'página' : 'páginas'} · '
+                    '${doc.chunks} ${doc.chunks == 1 ? 'fragmento' : 'fragmentos'}'),
                 onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => ChatPage(document: doc))),
                 trailing: PopupMenuButton<String>(
                   onSelected: (action) => action == 'move' ? _moveDocument(doc) : _deleteDocument(doc),
@@ -362,6 +363,7 @@ class _FolderBar extends StatelessWidget {
               avatar: Icon(iconFor(f), size: 18),
               label: Text('${f.name} (${f.documents})'),
               selected: f.id == selectedId,
+              showCheckmark: false,
               onSelected: (_) => onSelect(f.id),
             ),
           );
